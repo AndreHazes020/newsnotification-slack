@@ -18,11 +18,11 @@ const savePosted = (set) => fs.writeFile(STATE_FILE, JSON.stringify([...set]));
 
 const isPublished = (item) => new Date(item.publishedAt).getTime() <= Date.now();
 
-// Platform link: {SITE_BASE}/impact/{impactId}/updates/{slug}
+// Platform link: {SITE_BASE}/impact/related/{storyRef}
 function newsUrl(item) {
-  const impactId = item.impactId ?? item.impact?.id;   // <-- field TBC, see note
-  if (!impactId || !item.slug) return null;
-  return `${SITE_BASE}/impact/${impactId}/updates/${item.slug}`;
+  const story = item.storyRefs?.[0];   // first story ref on the item
+  if (!story) return null;             // no story → no link, message still posts
+  return `${SITE_BASE}/impact/related/${story}`;
 }
 
 // First gallery image, else a video thumbnail
