@@ -1,0 +1,33 @@
+name: news-to-slack
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: news-to-slack
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: node poll-news.js
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+      - name: Persist state
+        run: |
+          if [[ -n "$(git status --porcelain posted-ids.json)" ]]; then
+            git config user.name "github-actions"
+            git config user.email "actions@github.com"
+            git add posted-ids.json
+            git commit -m "Update posted news state [skip ci]"
+            git push
+          fi
