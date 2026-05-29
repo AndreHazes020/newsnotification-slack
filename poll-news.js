@@ -5,8 +5,8 @@ const SLACK_WEBHOOK_URL = process.env.SLACK_WEBHOOK_URL;
 const SITE_BASE = process.env.SITE_BASE || 'https://www.sumthing.org';
 const STATE_FILE = './posted-ids.json';
 const PAGE_SIZE = 25;
-const SEED = process.env.SEED === 'true';   // record IDs without posting
-const POST_DELAY_MS = 1200;                  // stay under Slack's ~1/sec limit
+const SEED = process.env.SEED === 'true';    // record IDs without posting
+const POST_DELAY_MS = 1200;                   // stay under Slack's ~1/sec limit
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -20,25 +20,49 @@ const isPublished = (item) => new Date(item.publishedAt).getTime() <= Date.now()
 
 // Platform link: {SITE_BASE}/impact/related/{storyRef}
 function newsUrl(item) {
-  const story = item.storyRefs?.[0];   // first story ref on the item
-  if (!story) return null;             // no story → no link, message still posts
+  const story = item.storyRefs?.[0];
+  if (!story) return null;
   return `${SITE_BASE}/impact/related/${story}`;
 }
 
-// First gallery image, else a video thumbnail
+// First gallery image, else a Mux video thumbnail
 function imageFor(item) {
   if (item.imageUrlGallery?.length) return item.imageUrlGallery[0];
-  if (item.video?.playbackRef) {               // assumes Mux-hosted video
+  if (item.video?.playbackRef) {
     const t = item.video.thumbnailTime ?? 0;
     return `https://image.mux.com/${item.video.playbackRef}/thumbnail.jpg?time=${t}`;
   }
   return null;
 }
 
+// Plain escape for fields without Markdown (e.g. author name)
+const escapeMrkdwn = (s) =>
+  String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+// Convert Markdown links [label](url) to Slack <url|label>, escape the rest.
+function formatText(raw) {
+  if (!raw) return '';
+  const links = [];
+  const placeheld = raw.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, url) => {
+    links.push({ label, url });
+    return `\u0000L${links.length - 1}\u0000`;
+  });
+  const escaped = placeheld
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+  return escaped.replace(/\u0000L(\d+)\u0000/g, (_, i) => {
+    const { label, url } = links[Number(i)];
+    const safeLabel = label
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return `<${url}|${safeLabel}>`;
+  });
+}
+
 function buildPayload(item) {
   const url = newsUrl(item);
   const author = escapeMrkdwn(item.author?.username ?? 'Unknown');
-  const text = escapeMrkdwn(item.text ?? '');
+  const text = formatText(item.text);
   const blocks = [{
     type: 'section',
     text: { type: 'mrkdwn', text: `*${author}*\n${text}` },
@@ -51,9 +75,6 @@ function buildPayload(item) {
 
   return { text: `New update from ${author}`, blocks };
 }
-
-const escapeMrkdwn = (s) =>
-  String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 async function sendPayload(payload) {
   const body = JSON.stringify(payload);
@@ -104,7 +125,7 @@ async function run() {
         await sleep(POST_DELAY_MS);
       }
       posted.add(item.id);
-      await savePosted(posted);   // save after each one — survives a crash
+      await savePosted(posted);   // survives a crash
     }
     page++;
   }
