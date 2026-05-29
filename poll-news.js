@@ -37,38 +37,52 @@ function imageFor(item) {
 
 function buildPayload(item) {
   const url = newsUrl(item);
-  // YouTube links unfurl into a playable preview on their own
-  const yt = item.youtubeEmbedId
-    ? `\nhttps://www.youtube.com/watch?v=${item.youtubeEmbedId}` : '';
-
+  const author = escapeMrkdwn(item.author?.username ?? 'Unknown');
+  const text = escapeMrkdwn(item.text ?? '');
   const blocks = [{
     type: 'section',
-    text: { type: 'mrkdwn',
-      text: `*${item.author?.username ?? 'Unknown'}*\n${item.text}${yt}` },
+    text: { type: 'mrkdwn', text: `*${author}*\n${text}` },
   }];
 
-  const img = item.youtubeEmbedId ? null : imageFor(item);
+  const img = imageFor(item);
   if (img) blocks.push({ type: 'image', image_url: img, alt_text: 'update media' });
   if (url) blocks.push({ type: 'context',
     elements: [{ type: 'mrkdwn', text: `<${url}|View on Sumthing →>` }] });
 
-  return { text: `New update from ${item.author?.username ?? 'the field'}`, blocks };
+  return { text: `New update from ${author}`, blocks };
 }
 
-async function postToSlack(item) {
-  const body = JSON.stringify(buildPayload(item));
+const escapeMrkdwn = (s) =>
+  String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+async function sendPayload(payload) {
+  const body = JSON.stringify(payload);
   for (let attempt = 0; attempt < 5; attempt++) {
     const res = await fetch(SLACK_WEBHOOK_URL, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
-    if (res.ok) return;
-    if (res.status === 429) {                  // honor Slack's retry-after
+    if (res.ok) return { ok: true };
+    if (res.status === 429) {
       const wait = (Number(res.headers.get('retry-after')) || 1) * 1000;
       await sleep(wait + 250);
       continue;
     }
-    throw new Error(`Slack ${res.status}: ${await res.text()}`);
+    return { ok: false, status: res.status, text: await res.text() };
   }
-  throw new Error('Slack: still rate-limited after retries');
+  return { ok: false, status: 429, text: 'rate-limited after retries' };
+}
+
+async function postToSlack(item) {
+  const payload = buildPayload(item);
+  let r = await sendPayload(payload);
+
+  // Slack rejected the blocks — almost always a bad image URL. Retry without images.
+  if (!r.ok && r.status === 400 && /invalid_blocks/.test(r.text)) {
+    console.warn(`Image rejected for item ${item.id}; retrying without image.`);
+    const stripped = { ...payload, blocks: payload.blocks.filter((b) => b.type !== 'image') };
+    r = await sendPayload(stripped);
+  }
+
+  if (!r.ok) throw new Error(`Slack ${r.status}: ${r.text}`);
 }
 
 async function run() {
