@@ -108,8 +108,10 @@ async function postToSlack(item) {
 
 async function run() {
   const posted = await loadPosted();
+  const pending = [];
   let page = 1, total = Infinity;
 
+  // Gather every new, already-published item across all pages first.
   while ((page - 1) * PAGE_SIZE < total) {
     const res = await fetch(`${API_BASE}?pageNumber=${page}&pageSize=${PAGE_SIZE}`);
     if (!res.ok) throw new Error(`API ${res.status}`);
@@ -118,16 +120,24 @@ async function run() {
     if (!data?.length) break;
 
     for (const item of data) {
-      if (!isPublished(item)) continue;
-      if (posted.has(item.id)) continue;
-      if (!SEED) {
-        await postToSlack(item);
-        await sleep(POST_DELAY_MS);
-      }
-      posted.add(item.id);
-      await savePosted(posted);   // survives a crash
+      if (!isPublished(item)) continue;   // scheduled for later — skip until it's live
+      if (posted.has(item.id)) continue;  // already sent
+      pending.push(item);
     }
     page++;
+  }
+
+  // Post oldest → newest so the most recent update lands as the latest Slack
+  // message, no matter what order the API returns pages in.
+  pending.sort((a, b) => new Date(a.publishedAt) - new Date(b.publishedAt));
+
+  for (const item of pending) {
+    if (!SEED) {
+      await postToSlack(item);
+      await sleep(POST_DELAY_MS);
+    }
+    posted.add(item.id);
+    await savePosted(posted);   // survives a crash
   }
   await savePosted(posted);
 }
