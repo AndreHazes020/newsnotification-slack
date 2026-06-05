@@ -4,7 +4,9 @@ const API_BASE = process.env.API_BASE || 'https://sumthing-api.com/v2/news';
 const SLACK_WEBHOOK_URL = process.env.SLACK_WEBHOOK_URL;
 const SITE_BASE = process.env.SITE_BASE || 'https://www.sumthing.org';
 const STATE_FILE = './posted-ids.json';
-const PAGE_SIZE = 25;
+const PAGE_SIZE = 100;   // API maximum — the endpoint has no sort, so every run
+                         // must sweep all items; fewer requests means less chance
+                         // the order shifts mid-sweep and an item is missed.
 const SEED = process.env.SEED === 'true';    // record IDs without posting
 const POST_DELAY_MS = 1200;                   // stay under Slack's ~1/sec limit
 
