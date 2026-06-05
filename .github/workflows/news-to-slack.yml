@@ -8,10 +8,10 @@ on:
         description: 'Seed state only (record IDs, post nothing)'
         type: boolean
         default: false
-      repostRecent:
-        description: 'Re-post the N most recently created items (0 = off)'
+      catchup:
+        description: 'Cutover: post the N newest unsent items, mark the rest seen (blank = normal)'
         type: string
-        default: '0'
+        default: ''
 
 concurrency:
   group: news-to-slack
@@ -32,7 +32,7 @@ jobs:
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
           SEED: ${{ inputs.seed }}
-          REPOST_RECENT: ${{ inputs.repostRecent }}
+          CATCHUP: ${{ inputs.catchup }}
       - name: Persist state
         if: always()                 # commit progress even if the run failed
         run: |
