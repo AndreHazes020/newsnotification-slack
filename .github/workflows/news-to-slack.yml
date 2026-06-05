@@ -8,6 +8,10 @@ on:
         description: 'Seed state only (record IDs, post nothing)'
         type: boolean
         default: false
+      repostRecent:
+        description: 'Re-post the N most recently created items (0 = off)'
+        type: string
+        default: '0'
 
 concurrency:
   group: news-to-slack
@@ -28,6 +32,7 @@ jobs:
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
           SEED: ${{ inputs.seed }}
+          REPOST_RECENT: ${{ inputs.repostRecent }}
       - name: Persist state
         if: always()                 # commit progress even if the run failed
         run: |

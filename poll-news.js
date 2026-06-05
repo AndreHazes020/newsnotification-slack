@@ -8,6 +8,9 @@ const PAGE_SIZE = 100;   // API maximum — the endpoint has no sort, so every r
                          // must sweep all items; fewer requests means less chance
                          // the order shifts mid-sweep and an item is missed.
 const SEED = process.env.SEED === 'true';    // record IDs without posting
+// One-off maintenance: re-send the N most recently created items even if they're
+// already in posted-ids.json (e.g. to surface updates that were only seeded).
+const REPOST_RECENT = Math.max(0, Number(process.env.REPOST_RECENT) || 0);
 const POST_DELAY_MS = 1200;                   // stay under Slack's ~1/sec limit
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -126,10 +129,10 @@ async function postToSlack(item) {
 
 async function run() {
   const posted = await loadPosted();
-  const pending = [];
+  const published = [];
   let page = 1, total = Infinity;
 
-  // Gather every new, already-published item across all pages first.
+  // Gather every already-published item across all pages first.
   while ((page - 1) * PAGE_SIZE < total) {
     const res = await fetch(`${API_BASE}?pageNumber=${page}&pageSize=${PAGE_SIZE}`);
     if (!res.ok) throw new Error(`API ${res.status}`);
@@ -139,11 +142,17 @@ async function run() {
 
     for (const item of data) {
       if (!isPublished(item)) continue;   // scheduled for later — skip until it's live
-      if (posted.has(item.id)) continue;  // already sent
-      pending.push(item);
+      published.push(item);
     }
     page++;
   }
+
+  // Normally: post items we haven't sent yet. In REPOST_RECENT mode: ignore the
+  // sent-list and re-send the N most recently created items (used to surface
+  // updates that were only seeded and never actually posted).
+  const pending = REPOST_RECENT
+    ? [...published].sort((a, b) => recencyOf(b) - recencyOf(a)).slice(0, REPOST_RECENT)
+    : published.filter((item) => !posted.has(item.id));
 
   // Post oldest → newest by when each item was added to the platform (createdAt),
   // so the most recently created update lands as the latest Slack message —
