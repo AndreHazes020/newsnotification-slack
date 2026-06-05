@@ -16,7 +16,44 @@ async function loadPosted() {
 }
 const savePosted = (set) => fs.writeFile(STATE_FILE, JSON.stringify([...set]));
 
-const isPublished = (item) => new Date(item.publishedAt).getTime() <= Date.now();
+// Parse publishedAt into epoch ms, tolerating formats `new Date()` mishandles.
+// Returns NaN only when the value is truly unusable.
+//   - ISO 8601 / anything Date understands natively  -> used as-is
+//   - epoch numbers (seconds or milliseconds)         -> normalised to ms
+//   - day-first dates "DD-MM-YYYY" / "DD/MM/YYYY"      -> parsed explicitly
+function parsePublishedAt(value) {
+  if (value == null) return NaN;
+
+  // Numeric epoch (number or numeric string). < 1e12 means it's in seconds.
+  if (typeof value === 'number' || /^\d+$/.test(String(value).trim())) {
+    const n = Number(value);
+    return n < 1e12 ? n * 1000 : n;
+  }
+
+  const s = String(value).trim();
+
+  // Let Date handle ISO 8601 and other formats it parses reliably.
+  const native = new Date(s).getTime();
+  if (!Number.isNaN(native)) return native;
+
+  // Day-first European format the API may use, e.g. "29-05-2026" or
+  // "29/05/2026 14:30". Reorder to ISO so the month/day aren't swapped.
+  const m = s.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})(?:[ T](\d{2}:\d{2}(?::\d{2})?))?$/);
+  if (m) {
+    const [, dd, mm, yyyy, time] = m;
+    const iso = `${yyyy}-${mm.padStart(2, '0')}-${dd.padStart(2, '0')}` +
+      (time ? `T${time}` : 'T00:00:00');
+    return new Date(iso).getTime();
+  }
+
+  return NaN;
+}
+
+const isPublished = (item) => {
+  const t = parsePublishedAt(item.publishedAt);
+  // Unparseable date: treat as live so a new update is never silently dropped.
+  return Number.isNaN(t) ? true : t <= Date.now();
+};
 
 // Platform link: {SITE_BASE}/impact/related/{storyRef}
 function newsUrl(item) {
@@ -128,8 +165,13 @@ async function run() {
   }
 
   // Post oldest → newest so the most recent update lands as the latest Slack
-  // message, no matter what order the API returns pages in.
-  pending.sort((a, b) => new Date(a.publishedAt) - new Date(b.publishedAt));
+  // message, no matter what order the API returns pages in. Undated items sort
+  // last (treated as +Infinity) rather than randomising the order.
+  const sortKey = (item) => {
+    const t = parsePublishedAt(item.publishedAt);
+    return Number.isNaN(t) ? Infinity : t;
+  };
+  pending.sort((a, b) => sortKey(a) - sortKey(b));
 
   for (const item of pending) {
     if (!SEED) {
