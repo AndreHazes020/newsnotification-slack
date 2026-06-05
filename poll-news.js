@@ -16,43 +16,22 @@ async function loadPosted() {
 }
 const savePosted = (set) => fs.writeFile(STATE_FILE, JSON.stringify([...set]));
 
-// Parse publishedAt into epoch ms, tolerating formats `new Date()` mishandles.
-// Returns NaN only when the value is truly unusable.
-//   - ISO 8601 / anything Date understands natively  -> used as-is
-//   - epoch numbers (seconds or milliseconds)         -> normalised to ms
-//   - day-first dates "DD-MM-YYYY" / "DD/MM/YYYY"      -> parsed explicitly
-function parsePublishedAt(value) {
-  if (value == null) return NaN;
+// API timestamps are ISO 8601 (e.g. "2026-03-01T00:00:00.000Z").
+const toEpoch = (value) => new Date(value).getTime();
 
-  // Numeric epoch (number or numeric string). < 1e12 means it's in seconds.
-  if (typeof value === 'number' || /^\d+$/.test(String(value).trim())) {
-    const n = Number(value);
-    return n < 1e12 ? n * 1000 : n;
-  }
-
-  const s = String(value).trim();
-
-  // Let Date handle ISO 8601 and other formats it parses reliably.
-  const native = new Date(s).getTime();
-  if (!Number.isNaN(native)) return native;
-
-  // Day-first European format the API may use, e.g. "29-05-2026" or
-  // "29/05/2026 14:30". Reorder to ISO so the month/day aren't swapped.
-  const m = s.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})(?:[ T](\d{2}:\d{2}(?::\d{2})?))?$/);
-  if (m) {
-    const [, dd, mm, yyyy, time] = m;
-    const iso = `${yyyy}-${mm.padStart(2, '0')}-${dd.padStart(2, '0')}` +
-      (time ? `T${time}` : 'T00:00:00');
-    return new Date(iso).getTime();
-  }
-
-  return NaN;
-}
-
+// publishedAt is the item's editorial date and is often backdated, so it only
+// tells us whether an item should be live yet — not how recently it was added.
 const isPublished = (item) => {
-  const t = parsePublishedAt(item.publishedAt);
-  // Unparseable date: treat as live so a new update is never silently dropped.
+  const t = toEpoch(item.publishedAt);
+  // Unparseable/absent date: treat as live so a new update is never dropped.
   return Number.isNaN(t) ? true : t <= Date.now();
+};
+
+// "Recency" for ordering: when the item actually appeared on the platform.
+// createdAt — not the backdated publishedAt — is what makes an update "latest".
+const recencyOf = (item) => {
+  const t = toEpoch(item.createdAt ?? item.publishedAt);
+  return Number.isNaN(t) ? 0 : t;
 };
 
 // Platform link: {SITE_BASE}/impact/related/{storyRef}
@@ -164,14 +143,11 @@ async function run() {
     page++;
   }
 
-  // Post oldest → newest so the most recent update lands as the latest Slack
-  // message, no matter what order the API returns pages in. Undated items sort
-  // last (treated as +Infinity) rather than randomising the order.
-  const sortKey = (item) => {
-    const t = parsePublishedAt(item.publishedAt);
-    return Number.isNaN(t) ? Infinity : t;
-  };
-  pending.sort((a, b) => sortKey(a) - sortKey(b));
+  // Post oldest → newest by when each item was added to the platform (createdAt),
+  // so the most recently created update lands as the latest Slack message —
+  // regardless of the order the API returns pages in, or how publishedAt is
+  // backdated to an editorial date.
+  pending.sort((a, b) => recencyOf(a) - recencyOf(b));
 
   for (const item of pending) {
     if (!SEED) {
